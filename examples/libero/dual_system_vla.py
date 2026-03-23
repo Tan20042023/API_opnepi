@@ -99,9 +99,16 @@ class HighLevelPlanner:
 class ExecutorConfig:
     """Configuration for low-level openpi executor wrapper."""
 
-    use_mock: bool = True
+    # Supported modes:
+    # - mock: local random action generator
+    # - local_policy: load openpi policy in-process
+    # - websocket: query a separate policy server (recommended for split envs)
+    mode: str = "mock"
     policy_config_name: str = "pi05_libero"
     checkpoint_dir: str = "gs://openpi-assets/checkpoints/pi05_libero"
+    server_host: str = "0.0.0.0"
+    server_port: int = 8000
+    server_api_key: str | None = None
     resize_size: int = 224
     default_chunk_size: int = 16
     action_dim: int = 7
@@ -114,8 +121,16 @@ class OpenPILowLevelExecutor:
     def __init__(self, config: ExecutorConfig):
         self._config = config
         self._policy: Any | None = None
-        if not self._config.use_mock:
+        self._ws_client: Any | None = None
+
+        valid_modes = {"mock", "local_policy", "websocket"}
+        if self._config.mode not in valid_modes:
+            raise ValueError(f"Unknown executor mode: {self._config.mode}. Expected one of {sorted(valid_modes)}")
+
+        if self._config.mode == "local_policy":
             self.load_policy()
+        elif self._config.mode == "websocket":
+            self._init_websocket_client()
 
     def load_policy(self) -> None:
         """Load pi05_libero policy via openpi local API."""
@@ -134,6 +149,20 @@ class OpenPILowLevelExecutor:
             self._config.checkpoint_dir,
         )
 
+    def _init_websocket_client(self) -> None:
+        from openpi_client import websocket_client_policy as _websocket_client_policy
+
+        self._ws_client = _websocket_client_policy.WebsocketClientPolicy(
+            host=self._config.server_host,
+            port=self._config.server_port,
+            api_key=self._config.server_api_key,
+        )
+        logging.info(
+            "Connected websocket policy client | host=%s port=%d",
+            self._config.server_host,
+            self._config.server_port,
+        )
+
     def generate_action(self, observation: LiberoObservation, subtask_prompt: str) -> np.ndarray:
         """
         Generate action chunk with shape [chunk_size, action_dim].
@@ -142,8 +171,20 @@ class OpenPILowLevelExecutor:
             observation: Latest observation snapshot from environment wrapper.
             subtask_prompt: Current short subtask from planner.
         """
-        if self._config.use_mock:
+        if self._config.mode == "mock":
             return self._mock_action_chunk(subtask_prompt)
+
+        if self._config.mode == "websocket":
+            if self._ws_client is None:
+                self._init_websocket_client()
+            if self._ws_client is None:
+                raise RuntimeError("Websocket executor client failed to initialize.")
+            model_input = self._build_openpi_input(observation, subtask_prompt)
+            inference_output = self._ws_client.infer(model_input)
+            action_chunk = np.asarray(inference_output["actions"], dtype=np.float32)
+            if action_chunk.ndim != 2:
+                raise ValueError(f"Expected [chunk_size, action_dim], got shape={action_chunk.shape}")
+            return action_chunk
 
         if self._policy is None:
             self.load_policy()
