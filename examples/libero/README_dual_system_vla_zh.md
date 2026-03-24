@@ -23,10 +23,10 @@
 - 仿真客户端用 LIBERO 环境（3.8）。
 - 两者通过 websocket 通信（executor.mode=websocket）。
 
-如果你使用的是 RTX 5090 + Notebook（torch 2.8.0 + cuda 12.9）场景，请优先看专用指南：
+如果你现在使用 A100 并希望按官方流程稳定复现，请优先看：
 
 - docs/openpi_libero_guide.md
-- examples/libero/setup_rtx5090_notebook_env.sh
+- examples/libero/setup_a100_official_env.sh
 
 ## 1. 先回答你的核心问题：还需要双终端吗
 
